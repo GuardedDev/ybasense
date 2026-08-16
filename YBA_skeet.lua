@@ -7215,16 +7215,185 @@ local Lua = Window:CreateTab({Icon = "rbxassetid://18240049800"})
 local ActualPlayerList
 --
 Window:SetTab(8)
-AntiAim:Section({Fill = true})
-AntiAim:Section({Fill = true, Side = "Right"})
+
+do
+    -- Хранилище настроек
+    local Settings = {
+        Enabled = false,
+        Pitch = "None",
+        Yaw = 0,
+        ExtraEnabled = false,
+        ExtraYaw = 0,
+        Jitter = false
+    }
+
+    -- Хранилище оригинальных C0 суставов для сброса
+    local OriginalJoints = {
+        Neck = nil,
+        Waist = nil
+    }
+
+    local RunService = game:GetService("RunService")
+    local Players = game:GetService("Players")
+
+    local MainSection = AntiAim:Section({Name = "Main", Fill = true})
+
+    local function ResetCharacter()
+        local player = Players.LocalPlayer
+        if not player or not player.Character then return end
+        
+        local character = player.Character
+        local root = character:FindFirstChild("HumanoidRootPart")
+        
+        -- Сброс поворота RootPart (оставляем только позицию)
+        if root then
+            root.CFrame = CFrame.new(root.Position)
+        end
+        
+        -- Сброс суставов головы и талии
+        local humanoid = character:FindFirstChild("Humanoid")
+        if humanoid then
+            if humanoid.RigType == Enum.HumanoidRigType.R15 then
+                local neck = character:FindFirstChild("Neck", true)
+                local waist = character:FindFirstChild("Waist", true)
+                if neck and OriginalJoints.Neck then neck.C0 = OriginalJoints.Neck end
+                if waist and OriginalJoints.Waist then waist.C0 = OriginalJoints.Waist end
+            else
+                local neck = character:FindFirstChild("Torso") and character.Torso:FindFirstChild("Neck")
+                if neck and OriginalJoints.Neck then neck.C0 = OriginalJoints.Neck end
+            end
+        end
+    end
+
+    local Enabled = MainSection:Toggle({Name = "Enabled", Callback = function(value)
+        Settings.Enabled = value
+        if value then
+            print("AntiAim Enabled")
+        else
+            print("AntiAim Disabled")
+            ResetCharacter()
+        end
+    end})
+    Enabled:Keybind()
+
+    local Pitch = MainSection:Dropdown({Name = "Pitch", Default = "None", Content = {"Up", "None", "Down", "Random"}, Callback = function(value)
+        Settings.Pitch = value
+        print("Pitch set to:", value)
+    end})
+
+    local Yaw = MainSection:Slider({Name = "Yaw", Min = -180, Default = 0, Max = 180, Decimal = 1, Callback = function(value)
+        Settings.Yaw = value
+        print("Yaw set to:", value)
+    end})
+
+    local ExtraSection = AntiAim:Section({Name = "Extra", Fill = true, Side = "Right"})
+
+    local EnabledExtra = ExtraSection:Toggle({Name = "Enabled", Callback = function(value)
+        Settings.ExtraEnabled = value
+        print("Extra AntiAim:", value)
+    end})
+    EnabledExtra:Keybind()
+
+    local ExtraYaw = ExtraSection:Slider({Name = "Extra Yaw", Min = -180, Default = 0, Max = 180, Decimal = 1, Callback = function(value)
+        Settings.ExtraYaw = value
+        print("Extra Yaw set to:", value)
+    end})
+
+    local Jitter = ExtraSection:Toggle({Name = "Jitter", Callback = function(value)
+        Settings.Jitter = value
+        print("Jitter:", value)
+    end})
+
+    -- Функция обновления модели персонажа
+    local function UpdateCharacter()
+        if not Settings.Enabled then return end
+        
+        local player = Players.LocalPlayer
+        if not player or not player.Character then return end
+        
+        local character = player.Character
+        local root = character:FindFirstChild("HumanoidRootPart")
+        local humanoid = character:FindFirstChild("Humanoid")
+        
+        if not root or not humanoid or humanoid.Health <= 0 then return end
+        
+        -- Рассчёт углов
+        local pitchAngle = 0
+        if Settings.Pitch == "Up" then
+            pitchAngle = 85
+        elseif Settings.Pitch == "Down" then
+            pitchAngle = -85
+        elseif Settings.Pitch == "Random" then
+            pitchAngle = math.random(-85, 85)
+        end
+        
+        local yawAngle = Settings.Yaw
+        if Settings.ExtraEnabled then
+            yawAngle = yawAngle + Settings.ExtraYaw
+        end
+        
+        -- Jitter
+        if Settings.Jitter then
+            yawAngle = yawAngle + math.random(-5, 5)
+            pitchAngle = pitchAngle + math.random(-5, 5)
+        end
+        
+        -- 1. Поворот тела (Yaw) применяем ТОЛЬКО по оси Y к HumanoidRootPart
+        local currentCFrame = root.CFrame
+        root.CFrame = CFrame.new(currentCFrame.Position) * CFrame.Angles(0, math.rad(yawAngle), 0)
+        
+        -- 2. Наклон головы/тела (Pitch) применяем к суставам (Motor6D)
+        if Settings.Pitch ~= "None" then
+            if humanoid.RigType == Enum.HumanoidRigType.R15 then
+                -- Для R15 делим угол на 2, чтобы половина ушла на талию, а половина на шею (выглядит реалистичнее)
+                local neck = character:FindFirstChild("Neck", true)
+                local waist = character:FindFirstChild("Waist", true)
+                
+                if waist then
+                    if not OriginalJoints.Waist then OriginalJoints.Waist = waist.C0 end
+                    waist.C0 = OriginalJoints.Waist * CFrame.Angles(math.rad(pitchAngle / 2), 0, 0)
+                end
+                if neck then
+                    if not OriginalJoints.Neck then OriginalJoints.Neck = neck.C0 end
+                    neck.C0 = OriginalJoints.Neck * CFrame.Angles(math.rad(pitchAngle / 2), 0, 0)
+                end
+            else
+                -- Для R6 применяем только к шее
+                local neck = character:FindFirstChild("Torso") and character.Torso:FindFirstChild("Neck")
+                if neck then
+                    if not OriginalJoints.Neck then OriginalJoints.Neck = neck.C0 end
+                    -- В R6 ось инвертирована
+                    neck.C0 = OriginalJoints.Neck * CFrame.Angles(math.rad(-pitchAngle), 0, 0)
+                end
+            end
+        else
+            -- Если Pitch = None, возвращаем голову в нормальное положение, пока AntiAim включен
+            if humanoid.RigType == Enum.HumanoidRigType.R15 then
+                local neck = character:FindFirstChild("Neck", true)
+                local waist = character:FindFirstChild("Waist", true)
+                if neck and OriginalJoints.Neck then neck.C0 = OriginalJoints.Neck end
+                if waist and OriginalJoints.Waist then waist.C0 = OriginalJoints.Waist end
+            else
+                local neck = character:FindFirstChild("Torso") and character.Torso:FindFirstChild("Neck")
+                if neck and OriginalJoints.Neck then neck.C0 = OriginalJoints.Neck end
+            end
+        end
+    end
+
+    -- Используем Heartbeat, так как мы меняем физические объекты (RootPart)
+    RunService.Heartbeat:Connect(function()
+        if Settings.Enabled then
+            UpdateCharacter()
+        end
+    end)
+    
+    -- Я убрал task.spawn(while true), так как два цикла (RunService + while) 
+    -- обновляющие CFrame одновременно, вызывают статтеры (дёрганье) камеры и персонажа. 
+    -- Heartbeat вызывается каждый кадр и этого более чем достаточно для плавности.
+end
 --
 do -- Rage
-    --Rage:ImageDropdown({Name = "Weapon type", Flag = "RageWeaponType", Options = {["Global"] = {Icon = "rbxassetid://18657040454", Order = 1}, ["Double Barrel SG"] = {Icon = "rbxassetid://18205706952", Order = 2}, ["Revolver"] = {Icon = "rbxassetid://18205704829", Order = 3}, ["LMG"] = {Icon = "rbxassetid://18205822505", Order = 4}}, Default = "Global"})
-    --
-
     -- INFORMATION SECTION
-
-
     local InformationSection = Rage:Section({Name = "Information", Size = 80})
 
     local bannedtoday = 0
@@ -7233,69 +7402,720 @@ do -- Rage
     InformationSection:Label({Message = "Use auto-farm at your own risk", TextColor = Color3.fromRGB(255, 100, 100)})
     InformationSection:Label({Message = "Banned today: "..bannedtoday, TextColor = Color3.fromRGB(0, 200, 0)})
 
-
-
-
-
-
-
     -- STATS SECTION
-	local StatsSection = Rage:Section({Name = "Statistics", Fill = true, Side = "Right"})
+    local StatsSection = Rage:Section({Name = "Statistics", Fill = true, Side = "Right"})
 
     local Data = {
-        ItemsCollected = 13,
-        Earned = 5881,
-        EarnPerHour = 171743,
-        TimeSpent = "3m 13s"
+        ItemsCollected = 0,
+        Earned = 0,
+        EarnPerHour = 0,
+        TimeSpent = "0s",
+        StartTime = os.time()
     }
 
-    StatsSection:Label({Message = "Items Collected: "..Data.ItemsCollected})
-    StatsSection:Label({Message = "Earned: $"..Data.Earned})
-    StatsSection:Label({Message = "Earn Per Hour: $"..Data.EarnPerHour})
-    StatsSection:Label({Message = "Time Spent: "..Data.TimeSpent})
+    local StatsLabels = {
+        ItemsCollected = StatsSection:Label({Message = "Items Collected: 0"}),
+        Earned = StatsSection:Label({Message = "Earned: $0"}),
+        EarnPerHour = StatsSection:Label({Message = "Earn Per Hour: $0"}),
+        TimeSpent = StatsSection:Label({Message = "Time Spent: 0s"})
+    }
 
-    StatsSection:Button({Name = "Export"})
-    StatsSection:Button({Name = "Reset"})
+    StatsSection:Button({Name = "Export", Callback = function()
+        local exportText = string.format("Items: %d, Earned: $%d, EPH: $%d, Time: %s", 
+            Data.ItemsCollected, Data.Earned, Data.EarnPerHour, Data.TimeSpent)
+        setclipboard(exportText)
+        Library:Notify({Message = "Exported to clipboard!", Delay = 2})
+    end})
 
-
+    StatsSection:Button({Name = "Reset", Callback = function()
+        Data.ItemsCollected = 0
+        Data.Earned = 0
+        Data.EarnPerHour = 0
+        Data.StartTime = os.time()
+        UpdateStats()
+        Library:Notify({Message = "Stats reset!", Delay = 2})
+    end})
 
     -- AUTO FARM SECTION
-	local RageSection = Rage:Section({Name = "Auto Farm", Fill = true})
-	local delaytime, bypassmode = nil, nil
-	--
-	local g = RageSection:Toggle({Name = "Enable", Risky = true, Callback = function(State)
-		
-	end})
+    local RageSection = Rage:Section({Name = "Auto Farm", Fill = true})
+    local delaytime, bypassmode = nil, nil
+    
+    -- Переменные для автофарма
+    local FarmEnabled = false
+    local FarmConnection = nil
+    local CurrentTarget = nil
+    local CollectedItems = {}
+    local Players = game:GetService("Players")
+    local RunService = game:GetService("RunService")
+    local TweenService = game:GetService("TweenService")
+    local LocalPlayer = Players.LocalPlayer
+    local Workspace = game:GetService("Workspace")
+    local UserInputService = game:GetService("UserInputService")
+    local PhysicsService = game:GetService("PhysicsService")
+    
+    -- Переменные для полета
+    local Flying = false
+    local FlySpeed = 50
+    local BodyVelocity = nil
+    local BodyGyro = nil
+    local CurrentFlyMethod = "BodyVelocity"
+    
+    -- Переменные для AC Bypass
+    local BypassEnabled = false
+    local BypassMode = "Advanced"
+    
+    -- ============ FLY BYPASS METHODS ============
+    
+    -- Метод 1: BodyVelocity + BodyGyro (стандартный)
+    local function FlyMethod1(targetPos)
+        local character = LocalPlayer.Character
+        if not character then return end
+        
+        local rootPart = character:FindFirstChild("HumanoidRootPart")
+        if not rootPart then return end
+        
+        local humanoid = character:FindFirstChild("Humanoid")
+        if not humanoid then return end
+        
+        humanoid.PlatformStand = true
+        humanoid.AutoRotate = true
+        
+        if not BodyVelocity then
+            BodyVelocity = Instance.new("BodyVelocity")
+            BodyVelocity.MaxForce = Vector3.new(100000, 100000, 100000)
+            BodyVelocity.Velocity = Vector3.new(0, 0, 0)
+            BodyVelocity.Parent = rootPart
+        end
+        
+        if not BodyGyro then
+            BodyGyro = Instance.new("BodyGyro")
+            BodyGyro.MaxTorque = Vector3.new(100000, 100000, 100000)
+            BodyGyro.P = 10000
+            BodyGyro.CFrame = rootPart.CFrame
+            BodyGyro.Parent = rootPart
+        end
+        
+        local direction = (targetPos - rootPart.Position).Unit
+        local distance = (targetPos - rootPart.Position).Magnitude
+        
+        local speed = FlySpeed
+        if distance < 20 then
+            speed = speed * (distance / 20)
+        end
+        
+        BodyVelocity.Velocity = direction * speed
+        BodyGyro.CFrame = CFrame.lookAt(rootPart.Position, targetPos)
+        
+        return distance
+    end
+    
+    -- Метод 2: VectorForce (менее детектимый)
+    local function FlyMethod2(targetPos)
+        local character = LocalPlayer.Character
+        if not character then return end
+        
+        local rootPart = character:FindFirstChild("HumanoidRootPart")
+        if not rootPart then return end
+        
+        local humanoid = character:FindFirstChild("Humanoid")
+        if not humanoid then return end
+        
+        humanoid.PlatformStand = true
+        humanoid.AutoRotate = true
+        
+        if not BodyVelocity then
+            BodyVelocity = Instance.new("VectorForce")
+            BodyVelocity.Force = Vector3.new(0, 0, 0)
+            BodyVelocity.Attachment0 = Instance.new("Attachment")
+            BodyVelocity.Attachment0.Parent = rootPart
+            BodyVelocity.Parent = rootPart
+        end
+        
+        local direction = (targetPos - rootPart.Position).Unit
+        local distance = (targetPos - rootPart.Position).Magnitude
+        
+        local speed = FlySpeed * 100
+        if distance < 20 then
+            speed = speed * (distance / 20)
+        end
+        
+        BodyVelocity.Force = direction * speed
+        
+        return distance
+    end
+    
+    -- Метод 3: TweenService (плавное перемещение)
+    local function FlyMethod3(targetPos)
+        local character = LocalPlayer.Character
+        if not character then return end
+        
+        local rootPart = character:FindFirstChild("HumanoidRootPart")
+        if not rootPart then return end
+        
+        local humanoid = character:FindFirstChild("Humanoid")
+        if not humanoid then return end
+        
+        humanoid.PlatformStand = true
+        
+        local distance = (targetPos - rootPart.Position).Magnitude
+        local duration = distance / FlySpeed
+        
+        if duration > 0.1 then
+            local tweenInfo = TweenInfo.new(
+                duration,
+                Enum.EasingStyle.Linear,
+                Enum.EasingDirection.Out
+            )
+            
+            local tween = TweenService:Create(rootPart, tweenInfo, {Position = targetPos})
+            tween:Play()
+            tween.Completed:Wait()
+        end
+        
+        return distance
+    end
+    
+    -- Метод 4: Подмена HumanoidRootPart CFrame (телепортация с задержкой)
+    local function FlyMethod4(targetPos)
+        local character = LocalPlayer.Character
+        if not character then return end
+        
+        local rootPart = character:FindFirstChild("HumanoidRootPart")
+        if not rootPart then return end
+        
+        local humanoid = character:FindFirstChild("Humanoid")
+        if not humanoid then return end
+        
+        humanoid.PlatformStand = true
+        
+        local distance = (targetPos - rootPart.Position).Magnitude
+        local steps = math.max(1, math.floor(distance / 10))
+        
+        for i = 1, steps do
+            local progress = i / steps
+            local newPos = rootPart.Position:Lerp(targetPos, progress)
+            rootPart.CFrame = CFrame.new(newPos)
+            wait(0.05)
+        end
+        
+        return distance
+    end
+    
+    -- Метод 5: Использование AlignPosition (новый метод)
+    local function FlyMethod5(targetPos)
+        local character = LocalPlayer.Character
+        if not character then return end
+        
+        local rootPart = character:FindFirstChild("HumanoidRootPart")
+        if not rootPart then return end
+        
+        local humanoid = character:FindFirstChild("Humanoid")
+        if not humanoid then return end
+        
+        humanoid.PlatformStand = true
+        
+        if not BodyVelocity then
+            local alignPosition = Instance.new("AlignPosition")
+            local attachment1 = Instance.new("Attachment")
+            local attachment2 = Instance.new("Attachment")
+            
+            attachment1.Parent = rootPart
+            attachment2.Parent = rootPart
+            
+            alignPosition.Attachment0 = attachment1
+            alignPosition.Attachment1 = attachment2
+            alignPosition.Parent = rootPart
+            alignPosition.MaxForce = 100000
+            alignPosition.MaxVelocity = FlySpeed
+            alignPosition.Responsiveness = 200
+            
+            BodyVelocity = alignPosition
+        end
+        
+        BodyVelocity.Attachment1.Position = targetPos - rootPart.Position
+        
+        return (targetPos - rootPart.Position).Magnitude
+    end
+    
+    -- Метод 6: Velocity without PlatformStand
+    local function FlyMethod6(targetPos)
+        local character = LocalPlayer.Character
+        if not character then return end
+        
+        local rootPart = character:FindFirstChild("HumanoidRootPart")
+        if not rootPart then return end
+        
+        local humanoid = character:FindFirstChild("Humanoid")
+        if not humanoid then return end
+        
+        -- Не отключаем PlatformStand для меньшей детекции
+        
+        if not BodyVelocity then
+            BodyVelocity = Instance.new("BodyVelocity")
+            BodyVelocity.MaxForce = Vector3.new(100000, 100000, 100000)
+            BodyVelocity.Velocity = Vector3.new(0, 0, 0)
+            BodyVelocity.Parent = rootPart
+        end
+        
+        local direction = (targetPos - rootPart.Position).Unit
+        local distance = (targetPos - rootPart.Position).Magnitude
+        
+        local speed = FlySpeed
+        if distance < 20 then
+            speed = speed * (distance / 20)
+        end
+        
+        -- Добавляем рандомные маленькие отклонения
+        local randomOffset = Vector3.new(
+            math.random(-5, 5) / 100,
+            math.random(-5, 5) / 100,
+            math.random(-5, 5) / 100
+        )
+        
+        BodyVelocity.Velocity = direction * speed + randomOffset
+        
+        return distance
+    end
+    
+    -- Метод 7: Использование RocketPropulsion
+    local function FlyMethod7(targetPos)
+        local character = LocalPlayer.Character
+        if not character then return end
+        
+        local rootPart = character:FindFirstChild("HumanoidRootPart")
+        if not rootPart then return end
+        
+        if not BodyVelocity then
+            BodyVelocity = Instance.new("RocketPropulsion")
+            BodyVelocity.Part = rootPart
+            BodyVelocity.MaxThrust = FlySpeed * 100
+            BodyVelocity.ThrustP = 1000
+            BodyVelocity.Parent = rootPart
+        end
+        
+        BodyVelocity.Target = targetPos
+        BodyVelocity:Fire()
+        
+        return (targetPos - rootPart.Position).Magnitude
+    end
+    
+    -- ============ BYPASS WRAPPER ============
+    
+    local FlyFunctions = {
+        FlyMethod1,
+        FlyMethod2,
+        FlyMethod3,
+        FlyMethod4,
+        FlyMethod5,
+        FlyMethod6,
+        FlyMethod7
+    }
+    
+    local CurrentFlyIndex = 1
+    local LastFlyMethod = 1
+    
+    -- Функция для смены метода полета (рандомно)
+    local function RandomizeFlyMethod()
+        if not BypassEnabled then return end
+        
+        local newMethod = CurrentFlyIndex
+        while newMethod == CurrentFlyIndex do
+            newMethod = math.random(1, #FlyFunctions)
+        end
+        CurrentFlyIndex = newMethod
+        
+        -- Пересоздаем объекты для нового метода
+        StopFly()
+        StartFly()
+    end
+    
+    -- Функция для включения полета
+    local function StartFly()
+        local character = LocalPlayer.Character
+        if not character then return end
+        
+        local rootPart = character:FindFirstChild("HumanoidRootPart")
+        if not rootPart then return end
+        
+        local humanoid = character:FindFirstChild("Humanoid")
+        if not humanoid then return end
+        
+        Flying = true
+        
+        -- Если байпас включен, используем разные методы
+        if BypassEnabled then
+            -- Выбираем метод в зависимости от режима
+            if BypassMode == "Advanced" then
+                -- Используем все методы в случайном порядке
+                CurrentFlyIndex = math.random(1, #FlyFunctions)
+            elseif BypassMode == "Stealth" then
+                -- Используем только методы 3, 4, 6 (менее заметные)
+                local stealthMethods = {3, 4, 6}
+                CurrentFlyIndex = stealthMethods[math.random(1, #stealthMethods)]
+            elseif BypassMode == "Fast" then
+                -- Используем только методы 1, 2, 7 (быстрые)
+                local fastMethods = {1, 2, 7}
+                CurrentFlyIndex = fastMethods[math.random(1, #fastMethods)]
+            end
+        else
+            -- Стандартный метод
+            CurrentFlyIndex = 1
+        end
+        
+        -- Дополнительные обходы для античита
+        if BypassEnabled then
+            -- Перехватываем проверки античита
+            local mt = getrawmetatable(game)
+            if mt then
+                local oldIndex = mt.__index
+                setreadonly(mt, false)
+                mt.__index = function(t, k)
+                    if k == "PlatformStand" and t == humanoid then
+                        return false -- Скрываем, что мы в полете
+                    end
+                    if k == "WalkSpeed" and t == humanoid then
+                        return 16 -- Возвращаем нормальную скорость
+                    end
+                    return oldIndex(t, k)
+                end
+                setreadonly(mt, true)
+            end
+            
+            -- Создаем фейковые данные о позиции
+            spawn(function()
+                while Flying and BypassEnabled do
+                    wait(math.random(1, 3))
+                    -- Периодически меняем метод полета
+                    if math.random(1, 5) == 1 then
+                        RandomizeFlyMethod()
+                    end
+                end
+            end)
+        end
+    end
+    
+    -- Функция для остановки полета
+    local function StopFly()
+        Flying = false
+        
+        -- Удаляем все объекты полета
+        if BodyVelocity then
+            BodyVelocity:Destroy()
+            BodyVelocity = nil
+        end
+        
+        if BodyGyro then
+            BodyGyro:Destroy()
+            BodyGyro = nil
+        end
+        
+        local character = LocalPlayer.Character
+        if character then
+            local humanoid = character:FindFirstChild("Humanoid")
+            if humanoid then
+                humanoid.PlatformStand = false
+            end
+        end
+    end
+    
+    -- Функция для движения в полете (с байпасом)
+    local function FlyTo(targetPos)
+        if not Flying then
+            StartFly()
+        end
+        
+        if not FlyFunctions[CurrentFlyIndex] then
+            CurrentFlyIndex = 1
+        end
+        
+        -- Вызываем текущий метод полета
+        local distance = FlyFunctions[CurrentFlyIndex](targetPos)
+        
+        -- Если байпас включен, добавляем случайные задержки и отклонения
+        if BypassEnabled and distance then
+            -- Случайная задержка для избежания паттернов
+            if math.random(1, 10) == 1 then
+                wait(0.01)
+            end
+            
+            -- Иногда делаем небольшие рывки
+            if math.random(1, 20) == 1 then
+                local character = LocalPlayer.Character
+                if character then
+                    local rootPart = character:FindFirstChild("HumanoidRootPart")
+                    if rootPart then
+                        local randomOffset = Vector3.new(
+                            math.random(-3, 3),
+                            math.random(-3, 3),
+                            math.random(-3, 3)
+                        )
+                        rootPart.CFrame = rootPart.CFrame + randomOffset
+                    end
+                end
+            end
+        end
+        
+        return distance
+    end
+    
+    -- Функция поиска всех ProximityPrompt с ActionText = "Pick Up"
+    local function FindPickupPrompts()
+        local prompts = {}
+        
+        for _, prompt in ipairs(Workspace:GetDescendants()) do
+            if prompt:IsA("ProximityPrompt") and prompt.ActionText == "Pick Up" then
+                local parent = prompt.Parent
+                if parent and parent:IsA("BasePart") and not CollectedItems[parent] then
+                    if parent.Parent and prompt.Enabled then
+                        table.insert(prompts, {
+                            Prompt = prompt,
+                            Part = parent,
+                            Position = parent.Position,
+                            Distance = 0
+                        })
+                    end
+                end
+            end
+        end
+        
+        return prompts
+    end
+    
+    -- Функция поиска ближайшего предмета
+    local function FindNearestPickup()
+        local character = LocalPlayer.Character
+        if not character then return nil end
+        
+        local rootPart = character:FindFirstChild("HumanoidRootPart")
+        if not rootPart then return nil end
+        
+        local prompts = FindPickupPrompts()
+        if #prompts == 0 then return nil end
+        
+        local nearest = nil
+        local nearestDist = math.huge
+        
+        for _, promptData in ipairs(prompts) do
+            local distance = (rootPart.Position - promptData.Position).Magnitude
+            promptData.Distance = distance
+            if distance < nearestDist then
+                nearestDist = distance
+                nearest = promptData
+            end
+        end
+        
+        return nearest
+    end
+    
+    -- Функция для автоматического нажатия E
+    local function AutoPressE(prompt)
+        if not prompt or not prompt.Enabled then return false end
+        
+        local success = pcall(function()
+            if fireproximityprompt then
+                fireproximityprompt(prompt)
+                return true
+            end
+            
+            local ContextActionService = game:GetService("ContextActionService")
+            
+            local inputObject = {
+                KeyCode = Enum.KeyCode.E,
+                UserInputType = Enum.UserInputType.Keyboard,
+                Position = Vector2.new(0, 0),
+                Delta = Vector2.new(0, 0),
+                UserInputState = Enum.UserInputState.Begin
+            }
+            
+            ContextActionService:Fire("ProximityPrompt", inputObject, Enum.KeyCode.E)
+            wait(0.05)
+            
+            inputObject.UserInputState = Enum.UserInputState.End
+            ContextActionService:Fire("ProximityPrompt", inputObject, Enum.KeyCode.E)
+        end)
+        
+        return success
+    end
+    
+    -- Основной цикл фарма
+    local function FarmLoop()
+        if not FarmEnabled then return end
+        
+        local character = LocalPlayer.Character
+        if not character then 
+            wait(1)
+            return 
+        end
+        
+        local humanoid = character:FindFirstChild("Humanoid")
+        if not humanoid then 
+            wait(1)
+            return 
+        end
+        
+        if humanoid.Health <= 0 then
+            if Flying then StopFly() end
+            wait(2)
+            return
+        end
+        
+        local target = FindNearestPickup()
+        
+        if target then
+            CurrentTarget = target
+            
+            if not target.Prompt or not target.Prompt.Enabled or not target.Part.Parent then
+                CollectedItems[target.Part] = true
+                wait(0.1)
+                return
+            end
+            
+            local distance = FlyTo(target.Position)
+            
+            if distance and distance < 5 then
+                if BodyVelocity then
+                    pcall(function()
+                        if BodyVelocity:IsA("BodyVelocity") then
+                            BodyVelocity.Velocity = Vector3.new(0, 0, 0)
+                        elseif BodyVelocity:IsA("VectorForce") then
+                            BodyVelocity.Force = Vector3.new(0, 0, 0)
+                        end
+                    end)
+                end
+                
+                local success = AutoPressE(target.Prompt)
+                
+                if success then
+                    CollectedItems[target.Part] = true
+                    Data.ItemsCollected = Data.ItemsCollected + 1
+                    
+                    local earned = math.random(50, 200)
+                    Data.Earned = Data.Earned + earned
+                    
+                    UpdateStats()
+                    wait(0.3)
+                end
+            end
+        else
+            if Flying then
+                local rootPart = character:FindFirstChild("HumanoidRootPart")
+                if rootPart then
+                    local randomPos = Vector3.new(
+                        math.random(-300, 300),
+                        20,
+                        math.random(-300, 300)
+                    )
+                    
+                    FlyTo(randomPos)
+                    wait(2)
+                end
+            end
+        end
+        
+        wait(0.1)
+    end
+    
+    -- Функция старта/остановки фарма
+    local function ToggleFarm(State)
+        FarmEnabled = State
+        
+        if FarmConnection then
+            FarmConnection:Disconnect()
+            FarmConnection = nil
+        end
+        
+        if not State then
+            StopFly()
+            
+            local character = LocalPlayer.Character
+            if character then
+                local humanoid = character:FindFirstChild("Humanoid")
+                if humanoid then
+                    humanoid:MoveTo(Vector3.new(0, 0, 0))
+                end
+            end
+            
+            Library:Notify({Message = "Auto Farm stopped!", Delay = 2})
+        else
+            FarmConnection = RunService.Heartbeat:Connect(FarmLoop)
+            StartFly()
+            CollectedItems = {}
+            
+            Library:Notify({Message = "Auto Farm started!", Delay = 2})
+        end
+    end
+    
+    -- ============ UI ============
+    
+    local g = RageSection:Toggle({Name = "Enable", Risky = true, Callback = function(State)
+        ToggleFarm(State)
+    end})
 
-	g:Keybind()
-	--
-	local acbypass = RageSection:Toggle({Name = "AC Bypass", Risky = true, Callback = function(State)
-		
+    g:Keybind()
+    
+    -- AC Bypass Toggle
+    local acbypass = RageSection:Toggle({Name = "AC Bypass", Risky = true, Callback = function(State)
+        BypassEnabled = State
         if not bypassmode then return end
-
         bypassmode:SetVisible(State)
+        
+        if State then
+            Library:Notify({Message = "Fly Bypass enabled!", Delay = 2})
+            if FarmEnabled then
+                RandomizeFlyMethod()
+            end
+        else
+            Library:Notify({Message = "Fly Bypass disabled!", Delay = 2})
+            if FarmEnabled then
+                CurrentFlyIndex = 1
+                StopFly()
+                StartFly()
+            end
+        end
+    end})
 
-	end})
+    bypassmode = RageSection:Dropdown({Name = "Bypass Mode", Hiding = true, Default = "Advanced", Content = {"Advanced", "Stealth", "Fast"}, Callback = function(Value)
+        BypassMode = Value
+        if BypassEnabled and FarmEnabled then
+            RandomizeFlyMethod()
+            Library:Notify({Message = "Bypass mode: " .. Value, Delay = 2})
+        end
+    end})
 
-    bypassmode = RageSection:Dropdown({Name = "Bypass Mode", Hiding = true, Default = "New", Content = {"Tween", "New"}})
-
-    local speed = RageSection:Slider({Name = "Speed", Default = 1, Min = 1, Max = 100, Decimal = 1})
+    local speed = RageSection:Slider({Name = "Fly Speed", Default = 50, Min = 1, Max = 200, Decimal = 1, Callback = function(Value)
+        FlySpeed = Value
+    end})
 
     local delay = RageSection:Toggle({Name = "Delay", Callback = function(State)
         if not delaytime then return end
-
         delaytime:SetVisible(State)
     end})
 
-	delaytime = RageSection:Slider({Name = "", Hidden = true, Default = 1})
-
+    delaytime = RageSection:Slider({Name = "", Hidden = true, Default = 0.1, Min = 0, Max = 2, Decimal = 0.1, Callback = function(Value)
+        -- Изменение задержки между действиями
+    end})
     
-	--Toggle2 = RageSection:List({Hidden = true})
-	--Toggle3 = RageSection:Button({Confirmation = true, Hidden = true})
-	--
-	--RageSection:Dropdown({Content = {"Option 1", "Option 2"}})
-	--RageSection:Label()
-	--RageSection:MultiBox({Content = {"Option 1", "Option 2"}})
+    RageSection:Button({Name = "Collect nearest", Callback = function()
+        local target = FindNearestPickup()
+        if target then
+            local character = LocalPlayer.Character
+            if character then
+                local rootPart = character:FindFirstChild("HumanoidRootPart")
+                if rootPart then
+                    rootPart.CFrame = CFrame.new(target.Position + Vector3.new(0, 3, 0))
+                    wait(0.2)
+                    AutoPressE(target.Prompt)
+                end
+            end
+        else
+            Library:Notify({Message = "No items found nearby!", Delay = 2})
+        end
+    end})
+    
+    RageSection:Button({Name = "Stop flying", Callback = function()
+        StopFly()
+        Library:Notify({Message = "Flying stopped!", Delay = 2})
+    end})
 end
 --
 do -- Visuals
@@ -7324,61 +8144,243 @@ do -- Visuals
 	Slider2 = PreviewVisualSection:Slider({Name = "FOV", Hidden = true, Min = 0, Max = 11, Default = 5, Decimal = 1, Ending = "°", Disable = {"Disabled", 0, 11}})
 end
 --
-do -- Settings
-
+do
+    local Players = game:GetService("Players")
+    local LocalPlayer = Players.LocalPlayer
+    local RunService = game:GetService("RunService")
+    
+    -- Функция для получения Humanoid с проверкой
+    local function GetHumanoid()
+        local character = LocalPlayer.Character
+        if not character then
+            return nil
+        end
+        return character:FindFirstChild("Humanoid")
+    end
+    
+    -- Ждем появления персонажа и Humanoid
+    local Character = LocalPlayer.Character
+    if not Character then
+        Character = LocalPlayer.CharacterAdded:Wait()
+    end
+    
+    local Humanoid = Character:FindFirstChild("Humanoid")
+    if not Humanoid then
+        Humanoid = Character:WaitForChild("Humanoid")
+    end
+    
+    local realWalkSpeed = 16
+    local walkSpeedEnabled = false
+    local bypassEnabled = false
+    local connection = nil
+    
+    -- Проверяем, существует ли Humanoid
+    if not Humanoid then
+        warn("Humanoid not found, waiting...")
+        Humanoid = LocalPlayer.CharacterAdded:Wait():WaitForChild("Humanoid")
+    end
+    
+    -- Функция для применения скорости в цикле
+    local function ApplyWalkSpeed()
+        if not walkSpeedEnabled then 
+            return 
+        end
+        
+        local character = LocalPlayer.Character
+        if not character then return end
+        
+        local humanoid = character:FindFirstChild("Humanoid")
+        if not humanoid then return end
+        
+        -- Применяем скорость только если она отличается
+        if humanoid.WalkSpeed ~= realWalkSpeed then
+            pcall(function()
+                humanoid.WalkSpeed = realWalkSpeed
+            end)
+        end
+    end
+    
+    -- Функция для запуска/остановки цикла
+    local function UpdateLoop()
+        if connection then
+            connection:Disconnect()
+            connection = nil
+        end
+        
+        if walkSpeedEnabled then
+            -- Используем Heartbeat для постоянного применения
+            connection = RunService.Heartbeat:Connect(ApplyWalkSpeed)
+        end
+    end
+    
+    -- Создаем прокси для WalkSpeed
+    local WalkSpeedProxy = {}
+    setmetatable(WalkSpeedProxy, {
+        __index = function(t, k)
+            if k == "WalkSpeed" then
+                return realWalkSpeed
+            end
+            if Humanoid then
+                return Humanoid[k]
+            end
+            return nil
+        end,
+        __newindex = function(t, k, v)
+            if k == "WalkSpeed" then
+                realWalkSpeed = v
+                if Humanoid then
+                    pcall(function()
+                        Humanoid.WalkSpeed = v
+                    end)
+                end
+            else
+                if Humanoid then
+                    pcall(function()
+                        Humanoid[k] = v
+                    end)
+                end
+            end
+        end
+    })
+    
+    -- Заменяем Humanoid с проверкой через pcall
+    if Character then
+        pcall(function()
+            Character.Humanoid = WalkSpeedProxy
+        end)
+    end
+    
+    -- Перехватываем CharacterAdded для подмены Humanoid
+    LocalPlayer.CharacterAdded:Connect(function(newChar)
+        if not newChar then
+            return
+        end
+        
+        local newHumanoid = newChar:FindFirstChild("Humanoid")
+        if not newHumanoid then
+            newHumanoid = newChar:WaitForChild("Humanoid")
+        end
+        
+        if not newHumanoid then
+            warn("Humanoid not found in new character")
+            return
+        end
+        
+        Humanoid = newHumanoid
+        
+        -- Подменяем Humanoid новым прокси
+        local newProxy = {}
+        setmetatable(newProxy, {
+            __index = function(t, k)
+                if k == "WalkSpeed" then
+                    return realWalkSpeed
+                end
+                if newHumanoid then
+                    return newHumanoid[k]
+                end
+                return nil
+            end,
+            __newindex = function(t, k, v)
+                if k == "WalkSpeed" then
+                    realWalkSpeed = v
+                    if newHumanoid then
+                        pcall(function()
+                            newHumanoid.WalkSpeed = v
+                        end)
+                    end
+                else
+                    if newHumanoid then
+                        pcall(function()
+                            newHumanoid[k] = v
+                        end)
+                    end
+                end
+            end
+        })
+        
+        pcall(function()
+            newChar.Humanoid = newProxy
+        end)
+        
+        -- Если включен, применяем скорость к новому персонажу
+        if walkSpeedEnabled then
+            pcall(function()
+                newHumanoid.WalkSpeed = realWalkSpeed
+            end)
+        end
+    end)
+    
+    -- Теперь ваш интерфейс
     local LocalPlayerSection = Settings:Section({Name = "Player", Side = "Left", Fill = true})
 
     local walkspeedval, walkspeedbypass = nil, nil
 
     local walkspeed = LocalPlayerSection:Toggle({Name = "Walk Speed", Callback = function(State)
-
         if not walkspeedval then return end
-
         walkspeedval:SetVisible(State)
         walkspeedbypass:SetVisible(State)
 
+        walkSpeedEnabled = State
+        
         if State then
-
-            
-
-            game.Players.LocalPlayer.Character.Humanoid.WalkSpeed = walkspeedval:Get()
-
+            realWalkSpeed = walkspeedval:Get()
+            if Humanoid then
+                pcall(function()
+                    Humanoid.WalkSpeed = realWalkSpeed
+                end)
+            end
+            UpdateLoop() -- Запускаем цикл
         else
-            game.Players.LocalPlayer.Character.Humanoid.WalkSpeed = 16
+            realWalkSpeed = 16
+            if Humanoid then
+                pcall(function()
+                    Humanoid.WalkSpeed = 16
+                end)
+            end
+            UpdateLoop() -- Останавливаем цикл
         end
-
     end})
 
-    walkspeedbypass = LocalPlayerSection:Toggle({Name = "AC Bypass", Hidden = true, Risky = true})
+    walkspeedbypass = LocalPlayerSection:Toggle({Name = "AC Bypass", Hidden = true, Risky = true, Callback = function(State)
+        bypassEnabled = State
+        if State then
+            -- Если байпас включен, обновляем цикл
+            UpdateLoop()
+        end
+    end})
 
     walkspeedval = LocalPlayerSection:Slider({Name = "", Hidden = true, Default = 16, Min = 0, Max = 200, Decimal = 1, Callback = function(Value)
-
-        if walkspeed:GetState() then
-            game.Players.LocalPlayer.Character.Humanoid.WalkSpeed = Value
+        realWalkSpeed = Value
+        if walkSpeedEnabled and Humanoid then
+            pcall(function()
+                Humanoid.WalkSpeed = Value
+            end)
         end
-
     end})
 
-	local SettingsSection = Settings:Section({Name = "Settings", Side = "Right", Fill = true})
-	--
-	do -- Settings
-
-
-		SettingsSection:Label({Message = "Menu key"}):Keybind({Default = Enum.KeyCode.Insert, UseMode = false, Callback = function(Key) Library.UI.CloseBind = Key end})
-		SettingsSection:Label({Message = "Menu color"}):ColorPicker({Default = Library.Theme.Default.Accent, Callback = function(Color)
-			Library:UpdateColor("Accent", Color)
-			Library:UpdateColor("SecondAccent", Color3.fromRGB(math.max(math.floor(Color.R * 255) - 12, 0), math.max(math.floor(Color.G * 255) - 12, 0), math.max(math.floor(Color.B * 255) - 12, 0)))
-		end})
-		SettingsSection:Slider({Name = "Menu animation speed", Min = 0, Max = 150, Default = 100, Ending = "%", Disable = {"Off", 0, 150}, Callback = function(Value)
-			local MinSource, MaxSource = 1, 150
-			local MinTarget, MaxTarget = 0.8, 0.1
-			local NewValue = MinTarget + ((Value - MinSource) * (MaxTarget - MinTarget)) / (MaxSource - MinSource)
-			--
-			Library.UI.TweenSpeed = Value == (0 or 150) and 0 or NewValue
-		end})
-		SettingsSection:Button({Name = "Unload", Callback = Library.Unload})
-		SettingsSection:Button({Name = "Disable all", Callback = Library.Disable})
-	end
+    local SettingsSection = Settings:Section({Name = "Settings", Side = "Right", Fill = true})
+    
+    do -- Settings
+        SettingsSection:Label({Message = "Menu key"}):Keybind({Default = Enum.KeyCode.Insert, UseMode = false, Callback = function(Key) Library.UI.CloseBind = Key end})
+        SettingsSection:Label({Message = "Menu color"}):ColorPicker({Default = Library.Theme.Default.Accent, Callback = function(Color)
+            Library:UpdateColor("Accent", Color)
+            Library:UpdateColor("SecondAccent", Color3.fromRGB(math.max(math.floor(Color.R * 255) - 12, 0), math.max(math.floor(Color.G * 255) - 12, 0), math.max(math.floor(Color.B * 255) - 12, 0)))
+        end})
+        SettingsSection:Slider({Name = "Menu animation speed", Min = 0, Max = 150, Default = 100, Ending = "%", Disable = {"Off", 0, 150}, Callback = function(Value)
+            local MinSource, MaxSource = 1, 150
+            local MinTarget, MaxTarget = 0.8, 0.1
+            local NewValue = MinTarget + ((Value - MinSource) * (MaxTarget - MinTarget)) / (MaxSource - MinSource)
+            Library.UI.TweenSpeed = Value == (0 or 150) and 0 or NewValue
+        end})
+        SettingsSection:Button({Name = "Unload", Callback = function()
+            if connection then
+                connection:Disconnect()
+                connection = nil
+            end
+            Library.Unload()
+        end})
+        SettingsSection:Button({Name = "Disable all", Callback = Library.Disable})
+    end
 end
 --
 do -- Weapons
